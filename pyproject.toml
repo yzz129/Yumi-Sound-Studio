@@ -1,11 +1,12 @@
 [project]
 name = "audio-sprout-studio"
 version = "0.1.0"
-description = "A unified local UI for IndexTTS and ACE-Step"
+description = "A unified local UI for Breeze TTS 2 and ACE-Step"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi==0.116.1",
   "gradio-client==2.0.2",
+  "httpx==0.28.1",
   "loguru==0.7.3",
   "python-multipart==0.0.20",
   "psutil==7.0.0",

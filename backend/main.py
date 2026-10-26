@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -48,42 +48,30 @@ def get_output(filename: str) -> FileResponse:
 
 @app.post("/api/tts")
 async def create_tts(
-    reference: UploadFile = File(...),
-    emotion_reference: UploadFile | None = File(None),
     text: str = Form(...),
-    speed: float = Form(1.0),
-    emotion: float = Form(0.65),
-    language: str = Form("ZH"),
-    emotion_mode: str = Form("voice"),
-    emotion_vector: str = Form("[0,0,0,0,0,0,0,0]"),
-    do_sample: bool = Form(True),
-    top_p: float = Form(0.8),
-    top_k: int = Form(30),
-    temperature: float = Form(0.8),
-    num_beams: int = Form(3),
-    repetition_penalty: float = Form(10.0),
-    segment_tokens: int = Form(120),
+    reference: UploadFile | None = File(None),
+    mode: Literal["clone", "design", "direction"] = Form("clone"),
+    ref_text: str = Form(""),
+    instruction: str = Form(""),
+    cfg_scale: float = Form(4.0, ge=1.0, le=10.0),
+    seed: int = Form(-1, ge=-1, le=4294967295),
 ) -> dict[str, object]:
-    """Queue a voice cloning request."""
+    """Queue Breeze voice cloning, voice design, or voice direction."""
     if not text.strip():
         raise HTTPException(status_code=400, detail="请输入要说的话")
-    source = await _save_upload(reference, "voice")
-    emotion_source = await _save_upload(emotion_reference, "emotion") if emotion_reference else None
-    if emotion_mode == "reference" and emotion_source is None:
-        raise HTTPException(status_code=400, detail="请上传情绪参考声音")
+    if mode != "design" and (reference is None or not reference.filename or not ref_text.strip()):
+        raise HTTPException(status_code=400, detail="声音克隆需要参考音频和对应的准确文字稿")
+    if mode != "clone" and not instruction.strip():
+        raise HTTPException(status_code=400, detail="请描述想要的音色、情绪或说话方式")
+    source = await _save_upload(reference, "voice") if mode != "design" and reference else None
     options = TtsOptions(
-        language=language if language in {"ZH", "EN", "JA", "AR", "ES"} else "ZH",
-        speed=_clamp(speed, 0.65, 1.6), emotion_mode=emotion_mode,
-        emotion=_clamp(emotion, 0.0, 1.0), emotion_reference=emotion_source,
-        emotion_vector=_parse_emotion_vector(emotion_vector), do_sample=do_sample,
-        top_p=_clamp(top_p, 0.0, 1.0), top_k=max(0, min(100, top_k)),
-        temperature=_clamp(temperature, 0.1, 2.0), num_beams=max(1, min(10, num_beams)),
-        repetition_penalty=_clamp(repetition_penalty, 0.1, 20.0),
-        segment_tokens=max(40, min(240, segment_tokens)),
+        mode=mode, ref_text=ref_text.strip() if source else "",
+        instruction=instruction.strip() if mode != "clone" else "",
+        cfg_scale=cfg_scale, seed=seed,
     )
 
     def task(update):
-        update("正在加载配音引擎，首次约需 1 分钟…")
+        update("正在加载 Breeze TTS 2，首次约需 1–2 分钟…")
         engines.ensure("tts")
         update("正在生成配音…")
         output = generate_tts(source, text.strip(), options)
@@ -159,6 +147,8 @@ async def create_music(
 
 async def _save_upload(upload: UploadFile, prefix: str) -> Path:
     suffix = Path(upload.filename or "audio.wav").suffix.lower()
+    if prefix == "voice" and suffix not in {".wav", ".mp3", ".flac", ".ogg"}:
+        raise HTTPException(status_code=400, detail="Breeze 参考声音支持 WAV、MP3、FLAC、OGG 格式")
     if suffix not in {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}:
         raise HTTPException(status_code=400, detail="请上传常见音频格式")
     target = UPLOAD_ROOT / f"{prefix}-{uuid.uuid4().hex}{suffix}"
@@ -178,16 +168,6 @@ def _optional_float(value: str) -> float | None:
         return float(value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="BPM 必须是数字") from exc
-
-
-def _parse_emotion_vector(value: str) -> list[float]:
-    try:
-        parsed = json.loads(value)
-        if not isinstance(parsed, list) or len(parsed) != 8:
-            raise ValueError
-        return [_clamp(float(item), 0.0, 1.0) for item in parsed]
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=400, detail="情绪向量格式不正确") from exc
 
 
 frontend = PROJECT_ROOT / "frontend" / "dist"

@@ -5,7 +5,7 @@ import { getStatus, startJob, waitForJob } from "./api";
 import AgentPet, { type MusicPlan } from "./AgentPet";
 import { PrivacyNote, RangeControl, UploadField } from "./components";
 import ResultPanel from "./ResultPanel";
-import { DEFAULT_MUSIC_SETTINGS, DEFAULT_TTS_SETTINGS, type MusicSettings, type TtsSettings } from "./settings";
+import { DEFAULT_MUSIC_SETTINGS, DEFAULT_TTS_SETTINGS, VOICE_PRESETS, type MusicSettings, type TtsSettings } from "./settings";
 import type { EngineStatus, JobState, Mode } from "./types";
 
 const initialStatus: EngineStatus = { active: null, tts_ready: false, music_ready: false, busy: false };
@@ -14,7 +14,6 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("tts");
   const [status, setStatus] = useState(initialStatus);
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
-  const [emotionReference, setEmotionReference] = useState<File | null>(null);
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [caption, setCaption] = useState("保持原节奏与旋律走向，原声降低，加入更多快板、二胡和少量锣鼓");
@@ -47,30 +46,30 @@ export default function App() {
     setError("");
     const body = new FormData();
     if (modeToRun === "tts") {
-      if (!voiceFile || !text.trim()) {
-        setError("先上传参考声音，再输入要说的话吧。");
+      if (!text.trim()) {
+        setError("先输入要说的话吧。");
         return false;
       }
-      if (ttsSettings.emotionMode === "reference" && !emotionReference) {
-        setError("选择了情绪参考模式，请再上传一段情绪参考声音。");
+      if (ttsSettings.mode !== "design" && (!voiceFile || !ttsSettings.refText.trim())) {
+        setError("请上传参考声音，并填写这段音频的准确文字稿。");
         return false;
       }
-      body.append("reference", voiceFile);
-      if (emotionReference) body.append("emotion_reference", emotionReference);
+      if (ttsSettings.mode !== "clone" && !ttsSettings.instruction.trim()) {
+        setError("请描述想要的音色、情绪或说话方式。");
+        return false;
+      }
+      if (!ttsSettings.randomSeed && (!/^\d+$/.test(ttsSettings.seed) || Number(ttsSettings.seed) > 4294967295)) {
+        setError("固定种子需要是 0 到 4294967295 之间的整数。");
+        return false;
+      }
+      if (ttsSettings.mode !== "design" && voiceFile) body.append("reference", voiceFile);
       body.append("text", text.trim());
       appendFields(body, {
-        language: ttsSettings.language,
-        speed: ttsSettings.speed,
-        emotion_mode: ttsSettings.emotionMode,
-        emotion: ttsSettings.emotionStrength,
-        emotion_vector: JSON.stringify(ttsSettings.emotionVector),
-        do_sample: ttsSettings.doSample,
-        top_p: ttsSettings.topP,
-        top_k: ttsSettings.topK,
-        temperature: ttsSettings.temperature,
-        num_beams: ttsSettings.numBeams,
-        repetition_penalty: ttsSettings.repetitionPenalty,
-        segment_tokens: ttsSettings.segmentTokens,
+        mode: ttsSettings.mode,
+        ref_text: ttsSettings.mode === "design" ? "" : ttsSettings.refText.trim(),
+        instruction: ttsSettings.mode === "clone" ? "" : ttsSettings.instruction.trim(),
+        cfg_scale: ttsSettings.mode === "clone" ? 1 : ttsSettings.cfgScale,
+        seed: ttsSettings.randomSeed ? -1 : ttsSettings.seed,
       });
     } else {
       const resolvedCaption = override?.caption || caption;
@@ -153,18 +152,28 @@ export default function App() {
         </div>
 
         <div className="intro-row">
-          <div><span className="eyebrow"><Sparkles size={14} /> {mode === "tts" ? "INDEXTTS 2.5" : "ACE-STEP 1.5"}</span><h1>{mode === "tts" ? "把文字，变成喜欢的声音" : "保留熟悉的节奏，添一点新味道"}</h1><p>{mode === "tts" ? "一段清晰参考音，就能开始本地配音。" : "先用预设快速开始，需要时再展开专业选项。"}</p></div>
+          <div><span className="eyebrow"><Sparkles size={14} /> {mode === "tts" ? "BREEZE TTS 2" : "ACE-STEP 1.5"}</span><h1>{mode === "tts" ? "把文字，变成喜欢的声音" : "保留熟悉的节奏，添一点新味道"}</h1><p>{mode === "tts" ? "克隆熟悉的音色，或用文字设计一个新声音。" : "先用预设快速开始，需要时再展开专业选项。"}</p></div>
           <span className={`sprout-mascot ${mode}`}><Leaf size={31} /><i /><b /></span>
         </div>
 
         {mode === "tts" ? (
           <>
-            <section className="form-grid" aria-label="文字配音设置">
-              <label className="wide-field"><span className="field-heading"><span>要说的话</span><em>{text.length}/1000</em></span><textarea value={text} maxLength={1000} placeholder="输入想让角色说的内容…" onChange={(event) => setText(event.target.value)} /></label>
-              <div className="field-block"><span className="field-heading"><span>音色参考</span><em>必填</em></span><UploadField file={voiceFile} label="上传或拖入参考声音" helper="建议 5–20 秒清晰人声" onChange={setVoiceFile} /></div>
-              <div className="controls-stack"><RangeControl label="语速" value={ttsSettings.speed} min={0.65} max={1.6} step={0.05} left="慢一点" right="快一点" display={`${ttsSettings.speed.toFixed(2)}×`} onChange={(speed) => setTtsSettings((current) => ({ ...current, speed }))} /><RangeControl label="情感强度" value={ttsSettings.emotionStrength} min={0.1} max={1} step={0.05} left="自然" right="更有情绪" display={`${Math.round(ttsSettings.emotionStrength * 100)}%`} onChange={(emotionStrength) => setTtsSettings((current) => ({ ...current, emotionStrength }))} /></div>
+            <section className="preset-strip" aria-label="配音方式">
+              <div className="section-heading"><span><Mic2 size={16} /> 配音方式</span><small>支持中文与英文</small></div>
+              <div className="choice-cards">
+                {([{ value: "clone", title: "声音克隆", copy: "跟随参考音色与原有表达" }, { value: "design", title: "文字设计音色", copy: "描述声音，无需参考音频" }, { value: "direction", title: "音色与表演", copy: "保留音色，用文字指导表达" }] as const).map((item) => <button type="button" key={item.value} aria-pressed={ttsSettings.mode === item.value} className={ttsSettings.mode === item.value ? "active" : ""} onClick={() => { setTtsSettings((current) => ({ ...current, mode: item.value })); setError(""); }}><strong>{item.title}</strong><small>{item.copy}</small></button>)}
+              </div>
             </section>
-            <TtsAdvancedSettings settings={ttsSettings} emotionReference={emotionReference} onChange={setTtsSettings} onEmotionReference={setEmotionReference} />
+            <section className="form-grid tts-form" aria-label="文字配音设置">
+              <label className="wide-field tts-text"><span className="field-heading"><span>要说的话</span><em>{text.length}/1000</em></span><textarea value={text} maxLength={1000} placeholder="输入想让角色说的内容，可加入 [笑]、[叹气] 等表演标记…" onChange={(event) => { setText(event.target.value); setError(""); }} /></label>
+              {ttsSettings.mode !== "design" && <>
+                <div className="field-block"><span className="field-heading"><span>音色参考</span><em>必填</em></span><UploadField file={voiceFile} label="上传或拖入参考声音" helper="WAV / MP3 / FLAC / OGG，清晰完整人声" accept=".wav,.mp3,.flac,.ogg" onChange={(file) => { setVoiceFile(file); setError(""); }} /></div>
+                <label className="wide-field"><span className="field-heading"><span>参考音频文字稿</span><em>必填</em></span><textarea value={ttsSettings.refText} placeholder="逐字填写参考音频中的全部内容，包含重复说的话…" onChange={(event) => { setTtsSettings((current) => ({ ...current, refText: event.target.value })); setError(""); }} /></label>
+              </>}
+              {ttsSettings.mode !== "clone" && <label className="wide-field tts-instruction"><span className="field-heading"><span>{ttsSettings.mode === "design" ? "想要的声音" : "表演指令"}</span><em>必填</em></span><textarea className="compact-textarea" value={ttsSettings.instruction} placeholder={ttsSettings.mode === "design" ? "例如：温暖、清澈的年轻女声，用舒缓自然的语气讲故事。英文配音请用英文描述。" : "例如：语速稍慢，用克制、严肃的语气说话，句尾适当停顿。"} onChange={(event) => { setTtsSettings((current) => ({ ...current, instruction: event.target.value })); setError(""); }} /><span className="tip-row">描述音色、语速与情绪；指令语言尽量与配音文字一致。</span></label>}
+            </section>
+            {ttsSettings.mode !== "clone" && <div className="preset-row voice-presets">{VOICE_PRESETS.map((preset) => <button type="button" key={preset.name} onClick={() => { setTtsSettings((current) => ({ ...current, instruction: preset.instruction })); setError(""); }}>{preset.name}</button>)}</div>}
+            <TtsAdvancedSettings settings={ttsSettings} onChange={setTtsSettings} />
           </>
         ) : (
           <>

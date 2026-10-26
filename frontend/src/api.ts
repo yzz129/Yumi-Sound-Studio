@@ -9,7 +9,10 @@ export async function getStatus(): Promise<EngineStatus> {
 export async function startJob(mode: "tts" | "music", body: FormData): Promise<JobState> {
   const response = await fetch(`/api/${mode}`, { method: "POST", body });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "提交失败");
+  if (!response.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : "参数不正确，请检查输入内容";
+    throw new Error(detail || "提交失败");
+  }
   return data;
 }
 

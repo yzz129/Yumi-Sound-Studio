@@ -1,24 +1,15 @@
-export type TtsLanguage = "ZH" | "EN" | "JA" | "AR" | "ES";
-export type EmotionMode = "voice" | "reference" | "vector";
-export type SamplingPreset = "stable" | "natural" | "creative";
+export type TtsMode = "clone" | "design" | "direction";
 export type MusicEditMode = "remix" | "flow_edit" | "repaint";
 export type MusicQuality = "fast" | "balanced" | "high";
 export type AudioFormat = "wav" | "flac" | "mp3";
 
 export interface TtsSettings {
-  language: TtsLanguage;
-  speed: number;
-  emotionMode: EmotionMode;
-  emotionStrength: number;
-  emotionVector: number[];
-  samplingPreset: SamplingPreset;
-  doSample: boolean;
-  temperature: number;
-  topP: number;
-  topK: number;
-  numBeams: number;
-  repetitionPenalty: number;
-  segmentTokens: number;
+  mode: TtsMode;
+  refText: string;
+  instruction: string;
+  cfgScale: number;
+  randomSeed: boolean;
+  seed: string;
 }
 
 export interface MusicSettings {
@@ -54,19 +45,12 @@ export interface MusicSettings {
 }
 
 export const DEFAULT_TTS_SETTINGS: TtsSettings = {
-  language: "ZH",
-  speed: 1,
-  emotionMode: "voice",
-  emotionStrength: 0.65,
-  emotionVector: [0, 0, 0, 0, 0, 0, 0, 0.35],
-  samplingPreset: "natural",
-  doSample: true,
-  temperature: 0.8,
-  topP: 0.8,
-  topK: 30,
-  numBeams: 3,
-  repetitionPenalty: 10,
-  segmentTokens: 120,
+  mode: "clone",
+  refText: "",
+  instruction: "",
+  cfgScale: 4,
+  randomSeed: true,
+  seed: "42",
 };
 
 export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
@@ -101,12 +85,11 @@ export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   negativePrompt: "",
 };
 
-export const EMOTION_PRESETS = [
-  { name: "平静", vector: [0, 0, 0, 0, 0, 0, 0, 0.75] },
-  { name: "喜悦", vector: [0.8, 0, 0, 0, 0, 0, 0.25, 0.1] },
-  { name: "愤怒", vector: [0, 0.85, 0, 0.15, 0.1, 0, 0, 0] },
-  { name: "悲伤", vector: [0, 0, 0.72, 0.08, 0, 0.55, 0, 0.05] },
-  { name: "紧张", vector: [0, 0.16, 0.08, 0.78, 0, 0.18, 0.08, 0] },
+export const VOICE_PRESETS = [
+  { name: "温柔讲述", instruction: "用温柔、自然的语气讲述，语速舒缓，停顿清晰。" },
+  { name: "活泼开心", instruction: "用明亮、开心的语气说话，节奏轻快，情绪自然。" },
+  { name: "克制悲伤", instruction: "用低落、克制的语气说话，语速稍慢，带有轻微叹息感。" },
+  { name: "紧张急迫", instruction: "用紧张、急迫的语气说话，节奏稍快，吐字清晰。" },
 ] as const;
 
 export const MUSIC_PRESETS = [
@@ -123,5 +106,3 @@ export const QUALITY_STEPS: Record<MusicQuality, number> = {
   balanced: 8,
   high: 14,
 };
-
-export const EMOTION_LABELS = ["喜", "怒", "哀", "惧", "厌恶", "低落", "惊喜", "平静"];

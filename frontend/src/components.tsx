@@ -5,10 +5,11 @@ interface UploadFieldProps {
   file: File | null;
   label: string;
   helper: string;
+  accept?: string;
   onChange: (file: File | null) => void;
 }
 
-export function UploadField({ file, label, helper, onChange }: UploadFieldProps) {
+export function UploadField({ file, label, helper, accept = "audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aac", onChange }: UploadFieldProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   return (
@@ -27,7 +28,7 @@ export function UploadField({ file, label, helper, onChange }: UploadFieldProps)
       <input
         ref={inputRef}
         type="file"
-        accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aac"
+        accept={accept}
         onChange={(event) => onChange(event.target.files?.[0] || null)}
       />
       <span className="upload-icon">{file ? <FileAudio size={22} /> : <Upload size={22} />}</span>

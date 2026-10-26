@@ -1,14 +1,20 @@
-"""Gradio API adapters for IndexTTS and ACE-Step."""
+"""Breeze TTS 2 streaming and ACE-Step Gradio API adapters."""
 
 from __future__ import annotations
 
+import mimetypes
+import secrets
 import shutil
 import time
 import urllib.request
-from dataclasses import dataclass, field
+import uuid
+import wave
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 from gradio_client import Client, handle_file
 
 from .config import MUSIC_URL, OUTPUT_ROOT, TTS_URL
@@ -16,21 +22,13 @@ from .config import MUSIC_URL, OUTPUT_ROOT, TTS_URL
 
 @dataclass(frozen=True)
 class TtsOptions:
-    """User-facing IndexTTS controls with safe local defaults."""
+    """Controls supported by the upstream Breeze TTS 2 speech API."""
 
-    language: str = "ZH"
-    speed: float = 1.0
-    emotion_mode: str = "voice"
-    emotion: float = 0.65
-    emotion_reference: Path | None = None
-    emotion_vector: list[float] = field(default_factory=lambda: [0.0] * 8)
-    do_sample: bool = True
-    top_p: float = 0.8
-    top_k: int = 30
-    temperature: float = 0.8
-    num_beams: int = 3
-    repetition_penalty: float = 10.0
-    segment_tokens: int = 120
+    mode: str = "clone"
+    ref_text: str = ""
+    instruction: str = ""
+    cfg_scale: float = 4.0
+    seed: int = -1
 
 
 @dataclass(frozen=True)
@@ -66,46 +64,78 @@ class MusicOptions:
     negative_prompt: str = ""
 
 
-def generate_tts(reference: Path, text: str, options: TtsOptions) -> Path:
-    """Generate speech from one voice reference and copy it into app outputs."""
-    client = Client(TTS_URL, verbose=False)
-    args = _tts_arguments(reference, text, options)
-    result = client.predict(*args, api_name="/gen_single")
-    return _collect_output(result, "voice")
+def generate_tts(reference: Path | None, text: str, options: TtsOptions) -> Path:
+    """Stream mono s16le PCM from Breeze into an atomic, playable WAV file."""
+    data = _tts_form(reference, text, options)
+    target = OUTPUT_ROOT / f"voice-{uuid.uuid4().hex}.wav"
+    partial = target.with_suffix(".wav.part")
+    try:
+        with ExitStack() as stack:
+            files = None
+            if reference is not None and options.mode != "design":
+                source = stack.enter_context(reference.open("rb"))
+                mime = mimetypes.guess_type(reference.name)[0] or "application/octet-stream"
+                files = {"ref_audio": (reference.name, source, mime)}
+            client = stack.enter_context(httpx.Client(
+                timeout=httpx.Timeout(900.0, connect=10.0, write=60.0), trust_env=False,
+            ))
+            response = stack.enter_context(client.stream(
+                "POST", f"{TTS_URL}/v1/audio/speech", data=data, files=files,
+            ))
+            if response.is_error:
+                response.read()
+                try:
+                    detail = response.json().get("detail", response.text)
+                except ValueError:
+                    detail = response.text
+                raise RuntimeError(f"Breeze TTS 2 生成失败（{response.status_code}）：{detail}")
+            if response.headers.get("X-Sample-Format") != "s16le":
+                raise RuntimeError("Breeze TTS 2 返回了不支持的音频格式。")
+            sample_rate = int(response.headers.get("X-Sample-Rate", "0"))
+            if not 8000 <= sample_rate <= 192000:
+                raise RuntimeError("Breeze TTS 2 返回了无效的采样率。")
+            size = 0
+            with wave.open(str(partial), "wb") as destination:
+                destination.setnchannels(1)
+                destination.setsampwidth(2)
+                destination.setframerate(sample_rate)
+                for chunk in response.iter_bytes(chunk_size=65536):
+                    if len(chunk) % 2:
+                        raise RuntimeError("Breeze TTS 2 返回的音频流不完整，请重试。")
+                    destination.writeframesraw(chunk)
+                    size += len(chunk)
+            if not size:
+                raise RuntimeError("Breeze TTS 2 没有返回音频，请重试。")
+        partial.replace(target)
+        return target
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            "Breeze TTS 2 的连接或音频流中断，请查看 runtime/logs/tts.log。"
+            "若内存或显存不足，请先关闭其他大型程序后重试。"
+        ) from exc
+    finally:
+        partial.unlink(missing_ok=True)
 
 
-def _tts_arguments(reference: Path, text: str, options: TtsOptions) -> list[Any]:
-    emotion_methods = {
-        "voice": "与音色参考音频相同",
-        "reference": "使用情感参考音频",
-        "vector": "使用情感向量控制",
+def _tts_form(reference: Path | None, text: str, options: TtsOptions) -> dict[str, str]:
+    if options.mode not in {"clone", "design", "direction"}:
+        raise ValueError("不支持的配音方式")
+    if not text.strip():
+        raise ValueError("请输入要说的话")
+    if options.mode != "design" and (reference is None or not options.ref_text.strip()):
+        raise ValueError("声音克隆需要参考音频和对应的准确文字稿")
+    if options.mode != "clone" and not options.instruction.strip():
+        raise ValueError("请描述想要的音色、情绪或说话方式")
+    data = {
+        "text": text.strip(),
+        "cfg_scale": str(1.0 if options.mode == "clone" else options.cfg_scale),
+        "seed": str(secrets.randbelow(2**32) if options.seed == -1 else options.seed),
     }
-    vector = [max(0.0, min(1.0, float(value))) for value in options.emotion_vector[:8]]
-    vector.extend([0.0] * (8 - len(vector)))
-    emotion_reference = handle_file(options.emotion_reference) if options.emotion_reference else None
-    # IndexTTS duration_factor is inverse to the user-facing speed multiplier.
-    duration_factor = 1.0 / max(0.2, options.speed)
-    return [
-        emotion_methods.get(options.emotion_mode, emotion_methods["voice"]),
-        handle_file(reference),
-        text,
-        options.language,
-        emotion_reference,
-        max(0.0, min(1.0, options.emotion)),
-        *vector,
-        "",  # emotion text requires the optional Qwen emotion model
-        False,
-        max(40, min(240, options.segment_tokens)),
-        duration_factor,
-        options.do_sample,
-        max(0.0, min(1.0, options.top_p)),
-        max(0, min(100, options.top_k)),
-        max(0.1, min(2.0, options.temperature)),
-        0.0,
-        max(1, min(10, options.num_beams)),
-        max(0.1, min(20.0, options.repetition_penalty)),
-        1500,
-    ]
+    if options.mode != "design":
+        data["ref_text"] = options.ref_text.strip()
+    if options.mode != "clone":
+        data["instruction"] = options.instruction.strip()
+    return data
 
 
 def generate_music(source: Path, caption: str, options: MusicOptions) -> list[Path]:
@@ -193,16 +223,6 @@ def _collect_outputs(result: Any, prefix: str, limit: int) -> list[Path]:
     if not outputs:
         raise RuntimeError("模型没有返回音频文件。")
     return outputs
-
-
-def _collect_output(result: Any, prefix: str) -> Path:
-    candidate = _extract_path(result)
-    if not candidate:
-        raise RuntimeError("模型没有返回音频文件。")
-    source = Path(str(candidate))
-    if not source.exists():
-        raise RuntimeError(f"模型输出不存在：{source}")
-    return _copy_output(source, prefix, 0)
 
 
 def _copy_output(source: Path, prefix: str, index: int) -> Path:

@@ -15,7 +15,7 @@ from typing import Literal
 import psutil
 from loguru import logger
 
-from .config import LOG_ROOT, MUSIC_ROOT, MUSIC_URL, PID_FILE, TTS_ROOT, TTS_URL
+from .config import LOG_ROOT, MUSIC_ROOT, MUSIC_URL, PID_FILE, PROJECT_ROOT, TTS_MODEL_ROOT, TTS_ROOT, TTS_URL
 
 EngineName = Literal["tts", "music"]
 
@@ -50,7 +50,7 @@ class EngineManager:
             "busy": self._process is not None and self._process.poll() is None and not active,
         }
 
-    def ensure(self, engine: EngineName, timeout: int = 210) -> None:
+    def ensure(self, engine: EngineName, timeout: int = 360) -> None:
         """Ensure one requested engine is loaded, stopping the managed peer first."""
         with self._lock:
             target_url = TTS_URL if engine == "tts" else MUSIC_URL
@@ -79,17 +79,37 @@ class EngineManager:
 
     def _start(self, engine: EngineName) -> None:
         root = TTS_ROOT if engine == "tts" else MUSIC_ROOT
-        script = "start-webui.bat" if engine == "tts" else "start-music.bat"
-        if not (root / script).exists():
-            raise EngineError(f"找不到 {root / script}")
+        if engine == "tts":
+            python = root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            if not python.is_file() or not (root / "breeze_infer" / "api.py").is_file():
+                raise EngineError("Breeze TTS 2 尚未安装，请先运行 setup-breeze.bat。")
+            required = ["config.json", "tokenizer.json", "audio_tokenizer/model.safetensors"]
+            index = TTS_MODEL_ROOT / "model.safetensors.index.json"
+            if index.is_file():
+                required.extend(set(json.loads(index.read_text(encoding="utf-8"))["weight_map"].values()))
+            else:
+                required.append("model.safetensors")
+            if any(not (TTS_MODEL_ROOT / name).is_file() for name in required):
+                raise EngineError("Breeze TTS 2 模型文件不完整，请运行 setup-breeze.bat 下载。")
+            command = [
+                str(python), str(PROJECT_ROOT / "scripts" / "breeze_server.py"), str(TTS_MODEL_ROOT),
+                "--host", "127.0.0.1", "--port", "7860", "--no-fast-all",
+            ]
+        else:
+            script = root / "start-music.bat"
+            if not script.exists():
+                raise EngineError(f"找不到 {script}")
+            command = ["cmd.exe", "/d", "/c", str(script)]
 
         log_path = LOG_ROOT / f"{engine}.log"
+        if self._log_handle:
+            self._log_handle.close()
         self._log_handle = log_path.open("ab", buffering=0)
         flags = 0
         if os.name == "nt":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         self._process = subprocess.Popen(
-            ["cmd.exe", "/d", "/c", script],
+            command,
             cwd=root,
             stdout=self._log_handle,
             stderr=subprocess.STDOUT,
@@ -153,6 +173,8 @@ class EngineManager:
         if not path.exists():
             return "模型进程意外退出。"
         tail = path.read_text(encoding="utf-8", errors="replace")[-1800:]
+        if "out of memory" in tail.lower() or "os error 1455" in tail.lower():
+            return "模型启动时内存或显存不足，请先关闭其他大型程序后重试。详细日志：runtime/logs/" + engine + ".log"
         return f"模型启动失败：\n{tail}"
 
 
@@ -168,10 +190,16 @@ class _ProcessAdapter:
 
 
 def _is_ready(base_url: str) -> bool:
+    path = "/health" if base_url == TTS_URL else "/gradio_api/info"
     try:
-        with urllib.request.urlopen(f"{base_url}/gradio_api/info", timeout=1.2) as response:
-            return response.status == 200
-    except (urllib.error.URLError, TimeoutError, OSError):
+        with urllib.request.urlopen(f"{base_url}{path}", timeout=1.2) as response:
+            if response.status != 200:
+                return False
+            if base_url == TTS_URL:
+                data = json.load(response)
+                return isinstance(data, dict) and data.get("status") == "ok" and data.get("sample_rate") == 24000
+            return True
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return False
 
 
@@ -185,7 +213,8 @@ def _is_expected_process(process: psutil.Process, engine: EngineName | None) -> 
         return False
     haystack = f"{joined} {children}"
     if engine == "tts":
-        return "start-webui.bat" in haystack or "webui.py" in haystack
+        is_breeze = "breeze_server.py" in haystack or "breeze_infer.api" in haystack
+        return is_breeze and f"{TTS_ROOT.as_posix().lower()}/" in haystack.replace("\\", "/")
     if engine == "music":
         return "start-music.bat" in haystack or "acestep" in haystack
     return False

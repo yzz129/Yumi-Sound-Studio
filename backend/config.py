@@ -1,10 +1,14 @@
 """Filesystem and service configuration."""
 
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
-TTS_ROOT = WORKSPACE_ROOT / "index-tts-2.5"
+TTS_ROOT = Path(os.environ.get("BREEZE_TTS_ROOT", WORKSPACE_ROOT / "breeze-tts")).resolve()
+TTS_MODEL_ROOT = Path(
+    os.environ.get("BREEZE_MODEL_DIR", TTS_ROOT / "checkpoints" / "breeze-tts-2")
+).resolve()
 MUSIC_ROOT = WORKSPACE_ROOT / "ACE-Step-1.5"
 RUNTIME_ROOT = PROJECT_ROOT / "runtime"
 UPLOAD_ROOT = RUNTIME_ROOT / "uploads"

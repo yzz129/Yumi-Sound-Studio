@@ -1,8 +1,6 @@
 import { ChevronDown, Gauge, Layers3, SlidersHorizontal, Sparkles } from "lucide-react";
-import { RangeControl, UploadField } from "./components";
+import { RangeControl } from "./components";
 import {
-  EMOTION_LABELS,
-  EMOTION_PRESETS,
   MUSIC_PRESETS,
   QUALITY_STEPS,
   type MusicSettings,
@@ -11,9 +9,7 @@ import {
 
 interface TtsAdvancedProps {
   settings: TtsSettings;
-  emotionReference: File | null;
   onChange: (settings: TtsSettings) => void;
-  onEmotionReference: (file: File | null) => void;
 }
 
 interface MusicAdvancedProps {
@@ -21,48 +17,21 @@ interface MusicAdvancedProps {
   onChange: (settings: MusicSettings) => void;
 }
 
-export function TtsAdvancedSettings({ settings, emotionReference, onChange, onEmotionReference }: TtsAdvancedProps) {
+export function TtsAdvancedSettings({ settings, onChange }: TtsAdvancedProps) {
   const patch = (changes: Partial<TtsSettings>) => onChange({ ...settings, ...changes });
-  const setVector = (index: number, value: number) => {
-    const emotionVector = [...settings.emotionVector];
-    emotionVector[index] = value;
-    patch({ emotionVector });
-  };
 
   return (
     <details className="advanced-panel">
-      <summary><span><SlidersHorizontal size={17} /> 更多配音选择</span><small>语言、情绪来源与采样质量</small><ChevronDown size={17} /></summary>
+      <summary><span><SlidersHorizontal size={17} /> 更多配音选择</span><small>指令强度与随机种子</small><ChevronDown size={17} /></summary>
       <div className="advanced-content">
         <section className="setting-section">
-          <div className="section-heading"><span><Sparkles size={16} /> 声音表达</span><small>先选情绪来源，再调整强度</small></div>
+          <div className="section-heading"><span><Sparkles size={16} /> 生成偏好</span><small>中文与英文自动识别</small></div>
           <div className="compact-grid three">
-            <label className="select-field"><span>语言</span><select value={settings.language} onChange={(event) => patch({ language: event.target.value as TtsSettings["language"] })}><option value="ZH">中文</option><option value="EN">English</option><option value="JA">日本語</option><option value="AR">العربية</option><option value="ES">Español</option></select></label>
-            <label className="select-field"><span>情绪来源</span><select value={settings.emotionMode} onChange={(event) => patch({ emotionMode: event.target.value as TtsSettings["emotionMode"] })}><option value="voice">跟随音色参考</option><option value="reference">单独情绪参考音</option><option value="vector">自定义八维情绪</option></select></label>
-            <label className="select-field"><span>生成风格</span><select value={settings.samplingPreset} onChange={(event) => applySamplingPreset(event.target.value as TtsSettings["samplingPreset"], settings, onChange)}><option value="stable">稳定清晰</option><option value="natural">自然均衡</option><option value="creative">更有变化</option></select></label>
+            <label className="select-field"><span>随机方式</span><select value={settings.randomSeed ? "random" : "fixed"} onChange={(event) => patch({ randomSeed: event.target.value === "random" })}><option value="random">每次不同</option><option value="fixed">固定种子</option></select></label>
+            {!settings.randomSeed && <label className="number-field"><span>种子</span><input type="number" min={0} max={4294967295} step={1} value={settings.seed} onChange={(event) => patch({ seed: event.target.value })} /></label>}
           </div>
-          {settings.emotionMode === "reference" && <UploadField file={emotionReference} label="上传情绪参考声音" helper="只参考情绪，不改变目标音色" onChange={onEmotionReference} />}
-          {settings.emotionMode === "vector" && (
-            <div className="emotion-editor">
-              <div className="preset-row">
-                {EMOTION_PRESETS.map((preset) => <button type="button" key={preset.name} onClick={() => patch({ emotionVector: [...preset.vector] })}>{preset.name}</button>)}
-              </div>
-              <div className="mini-range-grid">
-                {EMOTION_LABELS.map((label, index) => <RangeControl key={label} label={label} value={settings.emotionVector[index]} min={0} max={1} step={0.05} left="0" right="1" display={`${Math.round(settings.emotionVector[index] * 100)}%`} onChange={(value) => setVector(index, value)} />)}
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="setting-section">
-          <div className="section-heading"><span><Gauge size={16} /> 采样与稳定性</span><small>默认“自然均衡”通常最好用</small></div>
-          <div className="mini-range-grid sampling-grid">
-            <RangeControl label="温度" value={settings.temperature} min={0.1} max={1.5} step={0.1} left="稳定" right="多样" display={settings.temperature.toFixed(1)} onChange={(temperature) => patch({ temperature })} />
-            <RangeControl label="Top P" value={settings.topP} min={0.1} max={1} step={0.05} left="集中" right="开放" display={settings.topP.toFixed(2)} onChange={(topP) => patch({ topP })} />
-            <RangeControl label="Top K" value={settings.topK} min={0} max={100} step={5} left="不限" right="更多" display={String(settings.topK)} onChange={(topK) => patch({ topK })} />
-            <RangeControl label="重复抑制" value={settings.repetitionPenalty} min={1} max={15} step={0.5} left="自然" right="更强" display={settings.repetitionPenalty.toFixed(1)} onChange={(repetitionPenalty) => patch({ repetitionPenalty })} />
-            <RangeControl label="搜索束" value={settings.numBeams} min={1} max={6} step={1} left="快速" right="稳妥" display={String(settings.numBeams)} onChange={(numBeams) => patch({ numBeams })} />
-            <RangeControl label="分句长度" value={settings.segmentTokens} min={40} max={240} step={10} left="短句" right="长句" display={String(settings.segmentTokens)} onChange={(segmentTokens) => patch({ segmentTokens })} />
-          </div>
+          {settings.mode !== "clone" && <div className="mini-range-grid"><RangeControl label="指令跟随强度" value={settings.cfgScale} min={1} max={10} step={0.5} left="自然" right="更遵循描述" display={settings.cfgScale.toFixed(1)} onChange={(cfgScale) => patch({ cfgScale })} /></div>}
+          <span className="tip-row">声音克隆跟随参考音频的表达；语速和情绪可在“音色与表演”中用文字描述。</span>
         </section>
       </div>
     </details>
@@ -142,13 +111,4 @@ export function MusicAdvancedSettings({ settings, onChange }: MusicAdvancedProps
 
 function ChoiceButton({ active, title, copy, onClick }: { active: boolean; title: string; copy: string; onClick: () => void }) {
   return <button type="button" className={active ? "active" : ""} onClick={onClick}><strong>{title}</strong><small>{copy}</small></button>;
-}
-
-function applySamplingPreset(preset: TtsSettings["samplingPreset"], settings: TtsSettings, onChange: (settings: TtsSettings) => void) {
-  const values = preset === "stable"
-    ? { temperature: 0.55, topP: 0.7, topK: 20, numBeams: 4, repetitionPenalty: 11 }
-    : preset === "creative"
-      ? { temperature: 1.05, topP: 0.92, topK: 55, numBeams: 2, repetitionPenalty: 8 }
-      : { temperature: 0.8, topP: 0.8, topK: 30, numBeams: 3, repetitionPenalty: 10 };
-  onChange({ ...settings, samplingPreset: preset, ...values });
 }
